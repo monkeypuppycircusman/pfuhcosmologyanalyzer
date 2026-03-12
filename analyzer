@@ -1,0 +1,964 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PFUH Analyzer — FITS Viewer</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:      #0d1117;
+  --surface: #161b22;
+  --panel:   #1c2128;
+  --border:  #30363d;
+  --border2: #484f58;
+  --pi:      #79c0ff;
+  --phi:     #ffa657;
+  --tri:     #56d364;
+  --m:       #d2a8ff;
+  --text:    #c9d1d9;
+  --muted:   #8b949e;
+  --bright:  #f0f6fc;
+}
+
+body {
+  font-family: ui-monospace, "SFMono-Regular", "Cascadia Code", monospace;
+  font-size: 12px;
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* ── TITLE BAR ─────────────────────────────────────── */
+#titlebar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+#titlebar .app-title { font-weight: 700; font-size: 13px; color: var(--bright); }
+#titlebar .app-sub   { font-size: 11px; color: var(--muted); }
+#titlebar .spacer    { flex: 1; }
+#titlebar .consts    { display: flex; gap: 16px; font-size: 10px; color: var(--muted); }
+#titlebar .consts b  { color: var(--phi); }
+
+/* ── WORKSPACE ─────────────────────────────────────── */
+#workspace { display: flex; flex: 1; overflow: hidden; }
+
+/* ── SIDEBAR ───────────────────────────────────────── */
+#sidebar {
+  width: 182px; flex-shrink: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  overflow-y: auto;
+  padding: 10px 8px; gap: 4px;
+}
+
+.sec {
+  font-size: 10px; color: var(--muted);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 2px 0; border-bottom: 1px solid var(--border);
+  margin-top: 6px;
+}
+
+.btn {
+  display: block; width: 100%;
+  padding: 6px 10px; margin-top: 3px;
+  background: var(--panel);
+  border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text);
+  font-family: inherit; font-size: 11px;
+  cursor: pointer; text-align: left;
+  transition: border-color 0.1s, background 0.1s;
+}
+.btn:hover   { border-color: var(--border2); background: #21262d; }
+.btn.primary { border-color: var(--pi);  color: var(--pi); }
+.btn.primary:hover { background: rgba(121,192,255,0.07); }
+.btn.success { border-color: var(--tri); color: var(--tri); }
+.btn.success:hover { background: rgba(86,211,100,0.07); }
+.btn.off     { opacity: 0.38; cursor: default; pointer-events: none; }
+
+.radio-group { display: flex; flex-direction: column; gap: 3px; margin-top: 4px; }
+.radio-opt {
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 8px;
+  border: 1px solid var(--border); border-radius: 4px;
+  cursor: pointer; font-size: 11px;
+  transition: border-color 0.1s, background 0.1s;
+}
+.radio-opt:hover { border-color: var(--border2); background: #21262d; }
+.radio-opt.on    { border-color: var(--pi); color: var(--pi); background: rgba(121,192,255,0.06); }
+.rdot {
+  width: 8px; height: 8px; border-radius: 50%;
+  border: 1px solid var(--muted); flex-shrink: 0;
+}
+.radio-opt.on .rdot { background: var(--pi); border-color: var(--pi); }
+
+#hduSelect {
+  width: 100%; margin-top: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text); font-family: inherit; font-size: 11px;
+  padding: 5px 8px; cursor: pointer;
+}
+#hduSelect:disabled { opacity: 0.38; cursor: default; }
+
+/* ── CANVAS AREA ───────────────────────────────────── */
+#canvasWrap {
+  flex: 1; position: relative; overflow: hidden;
+  background: #090c10; cursor: crosshair;
+}
+#mainCanvas {
+  position: absolute; top: 0; left: 0;
+  transform-origin: top left;
+  image-rendering: pixelated;
+}
+#dropZone {
+  position: absolute; inset: 20px;
+  border: 2px dashed var(--border2); border-radius: 8px;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 8px;
+  pointer-events: none;
+}
+#dropZone.drag { border-color: var(--phi); }
+#dropZone .dz-ico   { font-size: 38px; opacity: 0.22; }
+#dropZone .dz-title { font-size: 13px; color: var(--muted); letter-spacing: 0.05em; }
+#dropZone .dz-sub   { font-size: 10px; color: var(--border2); }
+#hud-tl {
+  position: absolute; top: 8px; left: 8px;
+  font-size: 10px; color: rgba(121,192,255,0.5);
+  letter-spacing: 0.05em; line-height: 1.9; pointer-events: none;
+}
+#hud-br {
+  position: absolute; bottom: 8px; right: 10px;
+  font-size: 10px; color: var(--muted); pointer-events: none;
+}
+
+/* ── RIGHT PANEL ───────────────────────────────────── */
+#rightpanel {
+  width: 204px; flex-shrink: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  overflow-y: auto;
+  padding: 10px 8px; gap: 7px;
+}
+.metric {
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 7px 9px;
+}
+.metric .mlabel { font-size: 10px; color: var(--muted); letter-spacing: 0.07em; text-transform: uppercase; }
+.metric .mval   { font-size: 18px; font-weight: 700; margin: 2px 0; }
+.metric .msub   { font-size: 10px; color: var(--muted); }
+.m-pi   .mval { color: var(--pi); }
+.m-phi  .mval { color: var(--phi); }
+.m-m    .mval { color: var(--m); }
+.m-node .mval { color: var(--tri); }
+
+#histCanvas { width: 100%; height: 68px; border: 1px solid var(--border); border-radius: 3px; display: block; }
+
+.rpl { font-size: 10px; color: var(--muted); letter-spacing: 0.07em; text-transform: uppercase; margin-top: 2px; }
+
+#nodeList {
+  font-size: 10px; line-height: 1.85;
+  max-height: 155px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 3px;
+  padding: 5px 7px; color: var(--muted);
+}
+.nl-s { color: var(--text); }
+.nl-d { color: var(--phi); }
+
+#grammarSeq {
+  font-size: 10px; color: var(--pi); word-break: break-all; line-height: 1.7;
+  border: 1px solid var(--border); border-radius: 3px; padding: 5px 7px;
+}
+
+#ratioOut  { font-size: 11px; color: var(--muted); }
+#phiHitOut { font-size: 11px; color: var(--muted); }
+
+/* ── STATUS BAR ────────────────────────────────────── */
+#statusbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 4px 12px;
+  background: var(--surface); border-top: 1px solid var(--border);
+  font-size: 10px; color: var(--muted); flex-shrink: 0;
+}
+#statusText { flex: 1; }
+#progWrap { width: 120px; height: 3px; background: var(--panel); border-radius: 2px; overflow: hidden; }
+#progBar  { height: 100%; background: linear-gradient(90deg, var(--pi), var(--phi)); width: 0; transition: width 0.25s; }
+
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div id="titlebar">
+  <span class="app-title">PFUH Analyzer</span>
+  <span class="app-sub">FITS Viewer — Tinfoil Laboratories</span>
+  <div class="spacer"></div>
+  <div class="consts">
+    <span>π = <b>3.14159</b></span>
+    <span>φ = <b>1.61803</b></span>
+    <span>φ/π = <b>0.51503</b></span>
+    <span>Schumann = <b>7.83 Hz</b></span>
+  </div>
+</div>
+
+<div id="workspace">
+
+  <!-- SIDEBAR -->
+  <div id="sidebar">
+
+    <div class="sec">File Input</div>
+    <button class="btn primary" onclick="triggerOpen('fits')">⊕ Open FITS</button>
+    <button class="btn success" onclick="triggerOpen('img')">⊕ Open JPG</button>
+    <input type="file" id="fileInput" style="display:none">
+
+    <div class="sec">Display Mode</div>
+    <div class="radio-group" id="modeGroup">
+      <div class="radio-opt on" data-mode="raw"       onclick="setMode(this)"><div class="rdot"></div>Raw</div>
+      <div class="radio-opt"   data-mode="processed"  onclick="setMode(this)"><div class="rdot"></div>Processed</div>
+    </div>
+
+    <div class="sec">HDU Selector</div>
+    <select id="hduSelect" disabled onchange="changeHDU(this.value)">
+      <option value="">— no file —</option>
+    </select>
+
+    <div class="sec">View Controls</div>
+    <button class="btn" onclick="doZoomIn()">+ Zoom In</button>
+    <button class="btn" onclick="doZoomOut()">− Zoom Out</button>
+    <button class="btn" onclick="doResetView()">↺ Reset View</button>
+
+    <div class="sec">Export</div>
+    <button class="btn" onclick="doSavePNG()">↓ Save PNG</button>
+
+    <div class="sec">Views</div>
+    <button class="btn" id="btn1d" onclick="view1DMap()">View 1D Map</button>
+    <button class="btn" onclick="showHistogram()">Show Histogram</button>
+
+    <div class="sec">Future Tools</div>
+    <button class="btn off">Region Select (placeholder)</button>
+    <button class="btn off">Anomaly Tagging (placeholder)</button>
+    <button class="btn"     onclick="batchProcess()">Batch Process (placeholder)</button>
+
+  </div>
+
+  <!-- CANVAS -->
+  <div id="canvasWrap">
+    <canvas id="mainCanvas"></canvas>
+    <div id="dropZone">
+      <div class="dz-ico">◎</div>
+      <div class="dz-title">DROP FITS OR IMAGE FILE</div>
+      <div class="dz-sub">JPG · PNG · FITS · FIT · FTS</div>
+    </div>
+    <div id="hud-tl"></div>
+    <div id="hud-br">x:— y:—</div>
+  </div>
+
+  <!-- RIGHT PANEL -->
+  <div id="rightpanel">
+
+    <div class="rpl">PFUH Metrics</div>
+
+    <div class="metric m-node">
+      <div class="mlabel">Nodes detected</div>
+      <div class="mval"  id="metCount">—</div>
+      <div class="msub"  id="metSub">single · 1D</div>
+    </div>
+
+    <div class="metric m-phi">
+      <div class="mlabel">S / 1D ratio</div>
+      <div class="mval"  id="metRatio">—</div>
+      <div class="msub">target ≈ 7.833 (Schumann)</div>
+    </div>
+
+    <div class="metric m-m">
+      <div class="mlabel">φ-spacing hits</div>
+      <div class="mval"  id="metPhi">—</div>
+      <div class="msub">lat gap ratio ±18% of φ or 1/φ</div>
+    </div>
+
+    <div class="rpl">Histogram</div>
+    <canvas id="histCanvas"></canvas>
+
+    <div class="rpl">Detected Nodes</div>
+    <div id="nodeList">— load data —</div>
+
+    <div class="rpl">Band Grammar Sequence</div>
+    <div id="grammarSeq">—</div>
+
+    <div class="rpl">Ratio Check</div>
+    <div id="ratioOut">—</div>
+
+    <div class="rpl">φ-Hits</div>
+    <div id="phiHitOut">—</div>
+
+  </div>
+</div>
+
+<div id="statusbar">
+  <span id="statusText">Ready.</span>
+  <div id="progWrap"><div id="progBar"></div></div>
+</div>
+
+<input type="file" id="batchInput" multiple accept=".fits,.fit,.fts" style="display:none">
+
+<script>
+"use strict";
+
+const PI  = Math.PI;
+const PHI = (1 + Math.sqrt(5)) / 2;
+
+// ═══════════════════════════════════════════════════
+// PROCESSOR  — mirrors Processor class
+// ═══════════════════════════════════════════════════
+class Processor {
+  loadData(data) { return data; }
+
+  normalize(data) {
+    let mn = Infinity, mx = -Infinity;
+    for (const v of data) { if (v < mn) mn = v; if (v > mx) mx = v; }
+    const range = mx - mn;
+    if (range === 0) return new Float64Array(data.length);
+    const out = new Float64Array(data.length);
+    for (let i = 0; i < data.length; i++) out[i] = (data[i] - mn) / range;
+    return out;
+  }
+
+  threshold(data, value = 0.5) {
+    const out = new Float64Array(data.length);
+    for (let i = 0; i < data.length; i++) out[i] = data[i] > value ? 1.0 : 0.0;
+    return out;
+  }
+
+  // uniform_filter equivalent
+  smooth(data, w, h, kernelSize = 3) {
+    if (kernelSize <= 1) return data.slice();
+    const out  = new Float64Array(data.length);
+    const half = Math.floor(kernelSize / 2);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        let sum = 0, cnt = 0;
+        for (let dy = -half; dy <= half; dy++) {
+          for (let dx = -half; dx <= half; dx++) {
+            const nx = x + dx, ny = y + dy;
+            if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+              sum += data[ny * w + nx]; cnt++;
+            }
+          }
+        }
+        out[y * w + x] = sum / cnt;
+      }
+    }
+    return out;
+  }
+
+  detectRegions(data) { return data; }   // placeholder
+  pfuhPreprocess(data) { return data; }  // placeholder for PFUH-specific logic
+
+  // mirrors process_data pipeline exactly
+  processData(data, w, h) {
+    let d = this.loadData(data);
+    d = this.normalize(d);
+    d = this.smooth(d, w, h, 3);
+    d = this.threshold(d, 0.4);
+    d = this.detectRegions(d);
+    d = this.pfuhPreprocess(d);
+    return d;
+  }
+}
+
+// ═══════════════════════════════════════════════════
+// PIPELINE MANAGER  — mirrors PipelineManager
+// ═══════════════════════════════════════════════════
+class PipelineManager {
+  constructor(proc) {
+    this.processor     = proc;
+    this.rawData       = null;
+    this.processedData = null;
+    this.w = 0; this.h = 0;
+  }
+  setRaw(data, w, h) {
+    this.rawData = data; this.processedData = null;
+    this.w = w; this.h = h;
+  }
+  runPipeline() {
+    if (!this.rawData) return null;
+    this.processedData = this.processor.processData(this.rawData, this.w, this.h);
+    return this.processedData;
+  }
+  getRaw()       { return this.rawData; }
+  getProcessed() {
+    if (!this.rawData) return null;
+    if (!this.processedData) this.runPipeline();
+    return this.processedData;
+  }
+  reset() { this.rawData = null; this.processedData = null; }
+}
+
+// ═══════════════════════════════════════════════════
+// FILE LOADER  — mirrors FileLoader
+// ═══════════════════════════════════════════════════
+class FileLoader {
+
+  // mirrors load_jpg  (PIL convert('L') → grayscale float64)
+  loadJpg(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        const oc = document.createElement('canvas');
+        oc.width = img.width; oc.height = img.height;
+        const octx = oc.getContext('2d');
+        octx.drawImage(img, 0, 0);
+        const px   = octx.getImageData(0, 0, img.width, img.height).data;
+        const data = new Float64Array(img.width * img.height);
+        for (let i = 0; i < data.length; i++) {
+          // PIL L = 0.299R + 0.587G + 0.114B
+          data[i] = (px[i*4]*0.299 + px[i*4+1]*0.587 + px[i*4+2]*0.114) / 255;
+        }
+        URL.revokeObjectURL(url);
+        resolve({ data, w: img.width, h: img.height, isHealpix: false, validHdus: [] });
+      };
+      img.onerror = () => reject(new Error('Image load failed'));
+      img.src = url;
+    });
+  }
+
+  // mirrors load_fits / load_specific_hdu
+  loadFits(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload  = e => { try { resolve(this._parseFits(e.target.result)); } catch(err) { reject(err); } };
+      reader.onerror = () => reject(new Error('File read failed'));
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  _parseFits(buf) {
+    const BLOCK = 2880;
+    const bytes = new Uint8Array(buf);
+    let pos = 0;
+    let naxis1=0, naxis2=0, bitpix=0, naxis=0, bzero=0, bscale=1;
+    let dataStart = 0;
+    const validHdus = [0];
+
+    // Read header blocks
+    outer: while (pos + BLOCK <= bytes.length) {
+      for (let card = 0; card < 36; card++) {
+        const off  = pos + card * 80;
+        const line = String.fromCharCode(...bytes.slice(off, off + 80));
+        const key  = line.slice(0, 8).trimEnd();
+        const raw  = line.slice(10, 30).replace(/'/g,'').trim();
+        if (key === 'END')    { dataStart = pos + BLOCK; break outer; }
+        if (key === 'NAXIS1') naxis1 = parseInt(raw)   || 0;
+        if (key === 'NAXIS2') naxis2 = parseInt(raw)   || 0;
+        if (key === 'BITPIX') bitpix = parseInt(raw)   || 0;
+        if (key === 'NAXIS')  naxis  = parseInt(raw)   || 0;
+        if (key === 'BZERO')  bzero  = parseFloat(raw) || 0;
+        if (key === 'BSCALE') bscale = parseFloat(raw) || 1;
+      }
+      pos += BLOCK;
+    }
+
+    if (!naxis1 || !naxis2) {
+      throw new Error(
+        `FITS: could not read dimensions (NAXIS1=${naxis1}, NAXIS2=${naxis2}). ` +
+        `Try exporting your data as a PNG/JPG first.`
+      );
+    }
+
+    const n   = naxis1 * naxis2;
+    const bpp = Math.abs(bitpix) / 8;
+    const data = new Float64Array(n);
+    const view = new DataView(buf, dataStart);
+
+    for (let i = 0; i < n; i++) {
+      const off = i * bpp;
+      if (off + bpp > buf.byteLength - dataStart) break;
+      let v;
+      if      (bitpix ===   8) v = view.getUint8(off);
+      else if (bitpix ===  16) v = view.getInt16(off, false);
+      else if (bitpix ===  32) v = view.getInt32(off, false);
+      else if (bitpix === -32) v = view.getFloat32(off, false);
+      else if (bitpix === -64) v = view.getFloat64(off, false);
+      else v = 0;
+      data[i] = isFinite(v) ? v * bscale + bzero : 0;
+    }
+
+    return { data, w: naxis1, h: naxis2, isHealpix: naxis === 1, validHdus, bitpix };
+  }
+}
+
+// ═══════════════════════════════════════════════════
+// VISUALIZER  — mirrors Visualizer
+// ═══════════════════════════════════════════════════
+class Visualizer {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx    = canvas.getContext('2d');
+    this._zoom  = 1.0;
+    this._ox    = 0; this._oy = 0;
+    this._drag  = false; this._dx = 0; this._dy = 0;
+    this._w = 0; this._h = 0;
+    this._setupEvents();
+  }
+
+  _setupEvents() {
+    const wrap = this.canvas.parentElement;
+    wrap.addEventListener('mousedown',  e => { this._drag = true; this._dx = e.clientX - this._ox; this._dy = e.clientY - this._oy; });
+    wrap.addEventListener('mousemove',  e => this._onMove(e));
+    wrap.addEventListener('mouseup',    ()  => this._drag = false);
+    wrap.addEventListener('mouseleave', ()  => this._drag = false);
+    wrap.addEventListener('wheel',      e  => { e.preventDefault(); this._onWheel(e); }, { passive: false });
+  }
+
+  _onMove(e) {
+    const r  = this.canvas.parentElement.getBoundingClientRect();
+    const cx = Math.round((e.clientX - r.left - this._ox) / this._zoom);
+    const cy = Math.round((e.clientY - r.top  - this._oy) / this._zoom);
+    document.getElementById('hud-br').textContent = `x:${cx}  y:${cy}`;
+    if (this._drag) { this._ox = e.clientX - this._dx; this._oy = e.clientY - this._dy; this._applyXform(); }
+  }
+
+  _onWheel(e) {
+    const f = e.deltaY < 0 ? 1.15 : 1/1.15;
+    this._zoom = Math.max(0.05, Math.min(50, this._zoom * f));
+    this._applyXform();
+  }
+
+  _applyXform() {
+    this.canvas.style.transform = `translate(${this._ox}px,${this._oy}px) scale(${this._zoom})`;
+    document.getElementById('hud-tl').innerHTML =
+      `MODE: ${_currentMode.toUpperCase()}<br>${this._w}&times;${this._h}<br>ZOOM: ${this._zoom.toFixed(2)}&times;`;
+  }
+
+  // show_raw  →  cmap=gray, origin=lower
+  showRaw(data, w, h)       { this._render(data, w, h, 'gray');   }
+
+  // show_processed  →  cmap=plasma, origin=lower
+  showProcessed(data, w, h) { this._render(data, w, h, 'plasma'); }
+
+  // show_1d  →  line plot
+  show1D(data) {
+    const wrap = this.canvas.parentElement;
+    const W = wrap.clientWidth, H = wrap.clientHeight;
+    this.canvas.width  = W;
+    this.canvas.height = H;
+    this.ctx.fillStyle = '#090c10';
+    this.ctx.fillRect(0, 0, W, H);
+
+    let mn = Infinity, mx = -Infinity;
+    for (const v of data) { if(v<mn)mn=v; if(v>mx)mx=v; }
+    const range = mx - mn || 1;
+    const step  = W / data.length;
+
+    this.ctx.strokeStyle = '#79c0ff';
+    this.ctx.lineWidth   = 0.8;
+    this.ctx.beginPath();
+    for (let i = 0; i < data.length; i++) {
+      const x = i * step;
+      const y = H - ((data[i] - mn) / range) * (H - 24) - 12;
+      i === 0 ? this.ctx.moveTo(x, y) : this.ctx.lineTo(x, y);
+    }
+    this.ctx.stroke();
+
+    this.ctx.fillStyle = '#8b949e';
+    this.ctx.font      = '10px monospace';
+    this.ctx.fillText('1D HEALPix Map', 8, 14);
+    this.ctx.fillText('Pixel Index', W/2 - 30, H - 4);
+    this.ctx.fillText('Value', 4, H/2);
+    this._applyXform();
+  }
+
+  // show_histogram  — renders into the right-panel histCanvas
+  showHistogram(data, hCanvas) {
+    const dpr  = window.devicePixelRatio || 1;
+    hCanvas.width  = hCanvas.offsetWidth  * dpr;
+    hCanvas.height = hCanvas.offsetHeight * dpr;
+    const hctx = hCanvas.getContext('2d');
+    hctx.scale(dpr, dpr);
+    const W = hCanvas.offsetWidth, H = hCanvas.offsetHeight;
+    hctx.fillStyle = '#0d1117';
+    hctx.fillRect(0, 0, W, H);
+
+    const BINS   = 64;
+    const counts = new Array(BINS).fill(0);
+    const sample = Math.min(data.length, 80000);
+    for (let i = 0; i < sample; i++) {
+      const v = data[Math.floor(Math.random() * data.length)];
+      const b = Math.min(BINS-1, Math.floor(v * BINS));
+      if (b >= 0) counts[b]++;
+    }
+    const maxC = Math.max(...counts) || 1;
+    const bw   = W / BINS;
+    for (let i = 0; i < BINS; i++) {
+      const bh = (counts[i] / maxC) * (H - 2);
+      hctx.fillStyle = _colormap('plasma', i / BINS);
+      hctx.fillRect(i * bw, H - bh, bw - 0.5, bh);
+    }
+    hctx.fillStyle = '#30363d';
+    hctx.font      = '9px monospace';
+    hctx.fillText('Pixel Intensity', 3, 9);
+    hctx.fillText('Count', 3, H - 3);
+  }
+
+  // zoom_in / zoom_out / reset_view
+  zoomIn()    { this._zoom = Math.min(50,   this._zoom * 1.2);   this._applyXform(); }
+  zoomOut()   { this._zoom = Math.max(0.05, this._zoom / 1.2);   this._applyXform(); }
+  resetView() { this._zoom = 1.0; this._ox = 0; this._oy = 0;   this._applyXform(); }
+
+  // save_png
+  savePng() {
+    const a = document.createElement('a');
+    a.download = `pfuh_${_currentMode}_${Date.now()}.png`;
+    a.href     = this.canvas.toDataURL('image/png');
+    a.click();
+  }
+
+  _render(data, w, h, cmapName) {
+    this._w = w; this._h = h;
+    let mn = Infinity, mx = -Infinity;
+    for (const v of data) { if(v<mn)mn=v; if(v>mx)mx=v; }
+    const range = mx - mn || 1;
+
+    this.canvas.width  = w;
+    this.canvas.height = h;
+    const img = this.ctx.createImageData(w, h);
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const src = (h - 1 - y) * w + x;          // origin=lower flip
+        const t   = (data[src] - mn) / range;
+        const css = _colormap(cmapName, t);
+        const dst = (y * w + x) * 4;
+        img.data[dst]   = css[0];
+        img.data[dst+1] = css[1];
+        img.data[dst+2] = css[2];
+        img.data[dst+3] = 255;
+      }
+    }
+    this.ctx.putImageData(img, 0, 0);
+    this._applyXform();
+  }
+}
+
+// ═══════════════════════════════════════════════════
+// COLORMAPS
+// ═══════════════════════════════════════════════════
+function _colormap(name, t) {
+  t = Math.max(0, Math.min(1, t));
+  if (name === 'gray') {
+    const v = Math.round(t * 255);
+    return [v, v, v];
+  }
+  if (name === 'plasma') {
+    return [
+      Math.round(Math.min(255, 13  + 230*Math.pow(t,0.5))),
+      Math.round(Math.min(255, 8   + 244*Math.pow(t,2.5))),
+      Math.round(Math.min(255, 135 - 102*t)),
+    ];
+  }
+  // viridis default
+  return [
+    Math.round(Math.min(255, 68 + (253-68)*Math.pow(t,0.55))),
+    Math.round(Math.min(255, 2  + 229*Math.pow(t,0.78))),
+    Math.round(Math.min(255, 84 + Math.sin(t*PI)*100 + (37-84)*t)),
+  ];
+}
+
+// ═══════════════════════════════════════════════════
+// PFUH NODE ANALYSIS
+// ═══════════════════════════════════════════════════
+function _analyzeNodes(data, w, h) {
+  let mn=Infinity, mx=-Infinity;
+  for (const v of data) { if(v<mn)mn=v; if(v>mx)mx=v; }
+  const range = mx - mn || 1;
+
+  const THRESH  = 0.75;
+  const MIN_SEP = Math.max(3, Math.floor(Math.min(w,h) * 0.04));
+  const nodes   = [];
+
+  for (let y = 1; y < h-1; y++) {
+    for (let x = 1; x < w-1; x++) {
+      const v = (data[y*w+x] - mn) / range;
+      if (v < THRESH) continue;
+      let isMax = true;
+      outer: for (let dy=-1;dy<=1;dy++) for (let dx=-1;dx<=1;dx++) {
+        if (!dx&&!dy) continue;
+        if ((data[(y+dy)*w+(x+dx)]-mn)/range > v) { isMax=false; break outer; }
+      }
+      if (!isMax) continue;
+      let close = false;
+      for (const n of nodes) { if (Math.hypot(n.x-x,n.y-y)<MIN_SEP){close=true;break;} }
+      if (!close) nodes.push({ x, y, v, lon: Math.round(x/w*360), lat: Math.round((0.5-y/h)*180) });
+    }
+  }
+  nodes.sort((a,b) => b.v - a.v);
+
+  const singles = nodes.filter(n=>n.v<0.88).length;
+  const oned    = nodes.filter(n=>n.v>=0.88).length;
+
+  const bands = Array(16).fill(0);
+  for (const n of nodes) bands[Math.min(15,Math.floor(n.x/w*16))]++;
+
+  const lonMap = {};
+  for (const n of nodes) (lonMap[n.lon]=lonMap[n.lon]||[]).push(n.lat);
+  let phiHits=0, phiTotal=0;
+  for (const lats of Object.values(lonMap)) {
+    const s = lats.slice().sort((a,b)=>a-b);
+    for (let i=0;i<s.length-2;i++) {
+      const g1 = Math.abs(s[i+1]-s[i]);
+      const g2 = Math.abs(s[i+2]-s[i+1]);
+      if (!g1) continue;
+      const r = g2/g1; phiTotal++;
+      if (Math.abs(r-PHI)<0.18 || Math.abs(r-1/PHI)<0.18) phiHits++;
+    }
+  }
+  return { nodes, singles, oned, bands, phiHits, phiTotal };
+}
+
+// ═══════════════════════════════════════════════════
+// MAIN APP  — mirrors MainApp / _build_ui / callbacks
+// ═══════════════════════════════════════════════════
+const fileLoader = new FileLoader();
+const processor  = new Processor();
+const pipeline   = new PipelineManager(processor);
+const visualizer = new Visualizer(document.getElementById('mainCanvas'));
+
+let _displayMode    = 'raw';
+let _isHealpix      = false;
+let _validHdus      = [];
+let _lastFile       = null;
+let _currentMode    = 'raw';   // used by Visualizer HUD
+
+// open_file / open_jpg_file
+function triggerOpen(type) {
+  const fi = document.getElementById('fileInput');
+  fi._kind = type;
+  fi.accept = type === 'fits' ? '.fits,.fit,.fts' : '.jpg,.jpeg,.png';
+  fi.value  = '';
+  fi.click();
+}
+document.getElementById('fileInput').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const ext = file.name.split('.').pop().toLowerCase();
+  ['jpg','jpeg','png'].includes(ext) ? _openJpg(file) : _openFits(file);
+});
+
+async function _openFits(file) {
+  setStatus(`Loading: ${file.name} …`);
+  setProgress(10);
+  try {
+    const r = await fileLoader.loadFits(file);
+    _lastFile = file;
+    pipeline.setRaw(r.data, r.w, r.h);
+    _isHealpix = r.isHealpix;
+    _validHdus = r.validHdus;
+    _rebuildHduMenu(r.validHdus);
+    setStatus(`Loaded: ${file.name} | Shape: (${r.h}, ${r.w}) | BITPIX: ${r.bitpix}`);
+    document.getElementById('dropZone').style.display = 'none';
+    setProgress(60);
+    updateVisualization();
+    setProgress(100); setTimeout(()=>setProgress(0), 600);
+  } catch(err) {
+    setStatus(`Error: ${err.message}`);
+    setProgress(0);
+    alert(`Failed to load FITS file:\n${err.message}`);
+  }
+}
+
+async function _openJpg(file) {
+  setStatus(`Loading: ${file.name} …`);
+  setProgress(10);
+  try {
+    const r = await fileLoader.loadJpg(file);
+    _lastFile = file;
+    pipeline.setRaw(r.data, r.w, r.h);
+    _isHealpix = false;
+    _validHdus = [];
+    _rebuildHduMenu([]);
+    setStatus(`Loaded: ${file.name} | Shape: (${r.h}, ${r.w})`);
+    document.getElementById('dropZone').style.display = 'none';
+    setProgress(60);
+    updateVisualization();
+    setProgress(100); setTimeout(()=>setProgress(0), 600);
+  } catch(err) {
+    setStatus(`Error: ${err.message}`);
+    setProgress(0);
+  }
+}
+
+function _rebuildHduMenu(hdus) {
+  const sel = document.getElementById('hduSelect');
+  sel.innerHTML = '';
+  if (!hdus.length) {
+    sel.innerHTML = '<option value="">— no HDUs —</option>';
+    sel.disabled = true; return;
+  }
+  for (const idx of hdus) {
+    const o = document.createElement('option');
+    o.value = idx; o.textContent = `HDU ${idx}`;
+    sel.appendChild(o);
+  }
+  sel.disabled = false;
+}
+
+// update_visualization
+function updateVisualization() {
+  const w = pipeline.w, h = pipeline.h;
+  if (_displayMode === 'raw') {
+    const data = pipeline.getRaw();
+    if (!data) return;
+    _currentMode = 'raw';
+    visualizer.showRaw(data, w, h);
+    _runAnalysisUI(data, w, h);
+    visualizer.showHistogram(data, document.getElementById('histCanvas'));
+  } else {
+    const data = pipeline.getProcessed();
+    if (!data) return;
+    _currentMode = 'processed';
+    visualizer.showProcessed(data, w, h);
+    _runAnalysisUI(data, w, h);
+    visualizer.showHistogram(data, document.getElementById('histCanvas'));
+  }
+}
+
+function _runAnalysisUI(data, w, h) {
+  setProgress(75);
+  const r = _analyzeNodes(data, w, h);
+
+  document.getElementById('metCount').textContent = r.nodes.length;
+  document.getElementById('metSub').textContent   = `single:${r.singles}  ·  1D:${r.oned}`;
+
+  const ratio     = r.oned > 0 ? (r.singles / r.oned) : null;
+  const ratioText = ratio !== null ? ratio.toFixed(3) : '—';
+  document.getElementById('metRatio').textContent = ratioText;
+
+  const pct   = r.phiTotal > 0 ? (r.phiHits / r.phiTotal * 100).toFixed(1) : '0.0';
+  document.getElementById('metPhi').textContent  = pct + '%';
+
+  // ratio check
+  const ratioEl = document.getElementById('ratioOut');
+  if (ratio !== null) {
+    const hit = Math.abs(ratio - 7.833) < 1.0;
+    ratioEl.textContent = `S/D = ${ratioText}${hit ? '  ≈ 7.833 ✓' : ''}`;
+    ratioEl.style.color = hit ? 'var(--phi)' : 'var(--muted)';
+  } else { ratioEl.textContent = '—'; ratioEl.style.color = 'var(--muted)'; }
+
+  // phi hits
+  const phiEl = document.getElementById('phiHitOut');
+  phiEl.textContent = `${r.phiHits}/${r.phiTotal} = ${pct}%${parseFloat(pct)>15?' ↑ enriched':''}`;
+  phiEl.style.color = parseFloat(pct)>15 ? 'var(--phi)' : 'var(--muted)';
+
+  // band grammar
+  document.getElementById('grammarSeq').textContent = '[' + r.bands.join(', ') + ']';
+
+  // node list
+  const list = document.getElementById('nodeList');
+  if (!r.nodes.length) {
+    list.innerHTML = '<span style="color:var(--muted)">— no nodes above threshold —</span>';
+  } else {
+    list.innerHTML = r.nodes.slice(0, 40).map(n => {
+      const cls = n.v >= 0.88 ? 'nl-d' : 'nl-s';
+      return `<div class="${cls}">lon=${String(n.lon).padStart(4)} lat=${String(n.lat).padStart(4)} v=${n.v.toFixed(3)}</div>`;
+    }).join('') + (r.nodes.length>40 ? `<div style="color:var(--muted)">…+${r.nodes.length-40} more</div>` : '');
+  }
+  setProgress(100); setTimeout(()=>setProgress(0), 500);
+}
+
+// setMode  (radio buttons)
+function setMode(el) {
+  _displayMode = el.dataset.mode;
+  document.querySelectorAll('#modeGroup .radio-opt').forEach(o=>o.classList.remove('on'));
+  el.classList.add('on');
+  updateVisualization();
+}
+
+// zoom_in / zoom_out / reset_view  (sidebar buttons delegate to Visualizer)
+function doZoomIn()    { visualizer.zoomIn(); }
+function doZoomOut()   { visualizer.zoomOut(); }
+function doResetView() { visualizer.resetView(); }
+
+// save_current_view
+function doSavePNG() { visualizer.savePng(); setStatus('PNG saved.'); }
+
+// view_1d_map
+function view1DMap() {
+  if (!_isHealpix) { setStatus('This file is not a 1D HEALPix map.'); return; }
+  const data = pipeline.getRaw();
+  _currentMode = '1d';
+  visualizer.show1D(data);
+  setStatus('Displaying 1D HEALPix map.');
+}
+
+// show_histogram
+function showHistogram() {
+  const data = pipeline.getRaw();
+  if (!data) { setStatus('No data loaded.'); return; }
+  visualizer.showHistogram(data, document.getElementById('histCanvas'));
+  setStatus('Histogram displayed.');
+}
+
+// change_hdu
+async function changeHDU(idx) {
+  if (!_lastFile || idx === '') return;
+  setStatus(`Switching to HDU ${idx} …`);
+  try {
+    const r = await fileLoader.loadFits(_lastFile);
+    pipeline.setRaw(r.data, r.w, r.h);
+    _isHealpix = r.isHealpix;
+    updateVisualization();
+    setStatus(`Switched to HDU ${idx}`);
+  } catch(err) { setStatus(`Failed to load HDU ${idx}: ${err.message}`); }
+}
+
+// batch_process  (placeholder, mirrors original)
+function batchProcess() {
+  document.getElementById('batchInput').value = '';
+  document.getElementById('batchInput').click();
+}
+document.getElementById('batchInput').addEventListener('change', async e => {
+  const files = Array.from(e.target.files);
+  if (!files.length) { setStatus('Batch cancelled.'); return; }
+  setStatus(`Batch processing ${files.length} file(s) …`);
+  setProgress(5);
+  for (let i = 0; i < files.length; i++) {
+    try {
+      const r = await fileLoader.loadFits(files[i]);
+      processor.processData(r.data, r.w, r.h);
+      // No saving yet; just a placeholder
+      setProgress(Math.round(((i+1)/files.length)*100));
+    } catch(err) { console.warn(`Batch error on ${files[i].name}:`, err); }
+  }
+  setStatus('Batch processing complete (placeholder).');
+  setTimeout(()=>setProgress(0), 600);
+});
+
+// drag & drop
+const wrap = document.getElementById('canvasWrap');
+wrap.addEventListener('dragover',  e => { e.preventDefault(); document.getElementById('dropZone').classList.add('drag'); });
+wrap.addEventListener('dragleave', () => document.getElementById('dropZone').classList.remove('drag'));
+wrap.addEventListener('drop', e => {
+  e.preventDefault();
+  document.getElementById('dropZone').classList.remove('drag');
+  const file = e.dataTransfer.files[0];
+  if (!file) return;
+  const ext = file.name.split('.').pop().toLowerCase();
+  ['jpg','jpeg','png'].includes(ext) ? _openJpg(file) : _openFits(file);
+});
+
+function setStatus(msg) { document.getElementById('statusText').textContent = msg; }
+function setProgress(p) { document.getElementById('progBar').style.width = p + '%'; }
+</script>
+</body>
+</html>
